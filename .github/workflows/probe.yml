@@ -1,0 +1,72 @@
+name: Probe
+
+# HTTP availability probe. See README.md for the canary, the outside check and the 60-day renewal.
+# Scheduled-run failure e-mail goes to the user who last changed a cron line below.
+
+on:
+  schedule:
+    - cron: '7-59/15 11-23 * * *'
+    - cron: '7-59/15 0-1 * * *'
+    - cron: '37 2-10 * * *'
+  workflow_dispatch:
+    inputs:
+      canary:
+        description: 'Add a target that must FAIL (one deliberate red run to prove the e-mail path)'
+        type: boolean
+        default: false
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Probe
+        env:
+          PROBE_TARGETS: ${{ secrets.PROBE_TARGETS }}
+          CANARY: ${{ github.event_name == 'workflow_dispatch' && inputs.canary }}
+        run: bash .github/scripts/probe.sh
+
+  # Dead-man: the probe cannot report runs that never happened. Each run checks the gap since the
+  # previous completed scheduled run and fails if it is over 3 h (the longest planned gap is 1 h),
+  # so a late or dropped schedule is reported by the next run that does start. A schedule that
+  # stops completely is invisible from in here; README.md has the outside check for that.
+  deadman:
+    name: Dead-man
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: read
+    steps:
+      - name: Gap since the previous scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/probe.yml/runs?event=schedule&status=completed&per_page=5" \
+            --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID)][0].created_at // empty")
+          if [[ -z $prev ]]; then
+            echo "No previous scheduled run yet; nothing to compare." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gap=$(( $(date -u +%s) - $(date -u -d "$prev" +%s) ))
+          echo "Previous scheduled run created $prev; gap $((gap / 60)) min." | tee -a "$GITHUB_STEP_SUMMARY"
+          if (( gap > 10800 )); then
+            echo "::error title=Probe schedule gap::No scheduled run for $((gap / 60)) min (limit 180)."
+            exit 1
+          fi
