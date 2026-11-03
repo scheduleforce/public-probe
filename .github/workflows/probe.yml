@@ -5,8 +5,8 @@ name: Probe
 
 on:
   schedule:
-    - cron: '7-59/15 11-23 * * *'
-    - cron: '7-59/15 0-1 * * *'
+    - cron: '7,22,37,52 11-23 * * *'
+    - cron: '7,22,37,52 0-1 * * *'
     - cron: '37 2-10 * * *'
   workflow_dispatch:
     inputs:
